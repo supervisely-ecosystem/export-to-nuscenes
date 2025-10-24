@@ -192,7 +192,7 @@ def _safe_int(v, default=0) -> int:
 # -------------------------
 # Project parsing
 # -------------------------
-def _parse_rimages_for_sensors(rimage_folder: Path) -> set[str]:
+def _parse_rimages_for_sensors(rimage_folder: Path):
     jsons_paths = sly.fs.list_files_recursively(
         rimage_folder.as_posix(), [".json"], ignore_valid_extensions_case=True
     )
