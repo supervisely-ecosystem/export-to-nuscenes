@@ -29,7 +29,7 @@ class WorkingProjectType:
 # -------------------------
 # Math helpers
 # -------------------------
-def _euler_to_quaternion(roll: float, pitch: float, yaw: float) -> list[float]:
+def _euler_to_quaternion(roll: float, pitch: float, yaw: float) -> List[float]:
     cy = math.cos(yaw * 0.5)
     sy = math.sin(yaw * 0.5)
     cp = math.cos(pitch * 0.5)
