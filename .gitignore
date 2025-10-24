@@ -1,0 +1,6 @@
+.venv
+temp
+supervisely
+__pycache__
+.DS_Store
+.git-backup
