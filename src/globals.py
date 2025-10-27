@@ -1,5 +1,4 @@
 import os
-from distutils.util import strtobool
 from pathlib import Path
 
 import supervisely as sly
