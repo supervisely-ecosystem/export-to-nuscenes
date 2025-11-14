@@ -205,6 +205,29 @@ def _safe_int(v, default=0) -> int:
         return default
 
 
+def _prepare_sample_data_state(ann_path: Path) -> Tuple[bool, List[dict]]:
+    sample_data_path = ann_path / "sample_data.json"
+    sample_json_path = ann_path / "sample.json"
+    if sample_data_path.exists():
+        if not sample_json_path.exists():
+            sly.logger.warn(
+                "sample_data.json exists but sample.json is missing; rebuilding sample_data to keep consistency."
+            )
+            return True, []
+        try:
+            existing = sly.json.load_json_file(sample_data_path)
+            sly.logger.info(
+                f"Reusing existing sample_data.json located at {sample_data_path.as_posix()}"
+            )
+            return False, existing
+        except Exception as e:
+            sly.logger.warn(
+                f"Failed to read existing sample_data.json ({sample_data_path.as_posix()}): {repr(e)}. Will rebuild."
+            )
+            return True, []
+    return True, []
+
+
 def _load_key_id_map(project_path: Path) -> sly.KeyIdMap:
     key_map_path = project_path / "key_id_map.json"
 
@@ -327,7 +350,11 @@ def _collect_related_images(dataset_folder: Path) -> Dict[int, Dict[str, Dict[st
 # -------------------------
 # nuScenes builders
 # -------------------------
-def _build_taxonomy(meta_json_path: Path, ann_path: Path) -> Tuple[Dict[int, str], Dict[int, str]]:
+def _build_taxonomy(
+    meta_json_path: Path, ann_path: Path, classname_to_token_map: Dict[int, str] = None
+) -> Tuple[Dict[int, str], Dict[int, str]]:
+    if classname_to_token_map is None:
+        classname_to_token_map = {}
     meta = sly.json.load_json_file(meta_json_path)
     class2token: Dict[int, str] = {}
     tag2token: Dict[int, str] = {}
@@ -337,30 +364,32 @@ def _build_taxonomy(meta_json_path: Path, ann_path: Path) -> Tuple[Dict[int, str
         title = objclass["title"]
         desc = objclass.get("description", "")
         cid = objclass["id"]
-        tok = _new_token()
+        tok = classname_to_token_map.get(title) or _new_token()
         class2token[cid] = tok
         categories.append({"token": tok, "name": title, "description": desc})
     _write_json(ann_path / "category.json", categories)
 
-    attributes = []
-    for attr in meta.get("tags", []):
-        name = attr["name"]
-        tok = _new_token()
-        tid = attr["id"]
-        tag2token[tid] = tok
-        attributes.append({"token": tok, "name": name, "description": ""})
-    _write_json(ann_path / "attribute.json", attributes)
+    if (ann_path / "attribute.json").exists():
+        attributes = []
+        for attr in meta.get("tags", []):
+            name = attr["name"]
+            tok = _new_token()
+            tid = attr["id"]
+            tag2token[tid] = tok
+            attributes.append({"token": tok, "name": name, "description": ""})
+        _write_json(ann_path / "attribute.json", attributes)
 
-    # Visibility: standard 4 levels
-    visibility = [
-        {"token": "1", "description": "visibility 0-40%"},
-        {"token": "2", "description": "visibility 40-60%"},
-        {"token": "3", "description": "visibility 60-80%"},
-        {"token": "4", "description": "visibility 80-100%"},
-    ]
-    _write_json(ann_path / "visibility.json", visibility)
+    if not (ann_path / "visibility.json").exists():
+        visibility = [
+            {"token": "1", "description": "visibility 0-40%"},
+            {"token": "2", "description": "visibility 40-60%"},
+            {"token": "3", "description": "visibility 60-80%"},
+            {"token": "4", "description": "visibility 80-100%"},
+        ]
+        _write_json(ann_path / "visibility.json", visibility)
 
-    _write_json(ann_path / "map.json", [])
+    if not (ann_path / "map.json").exists():
+        _write_json(ann_path / "map.json", [])
     return class2token, tag2token
 
 
@@ -703,35 +732,49 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
     _ensure_dir(sweeps_path)
     _ensure_dir(ann_path)
 
+    build_sample_data, existing_sample_data = _prepare_sample_data_state(ann_path)
+    sample_data_path = ann_path / "sample_data.json"
+
     # key_id_map = _load_key_id_map(local_project_path)
     if "key_id_map" in custom_data:
         key_id_map = sly.KeyIdMap.from_dict(custom_data["key_id_map"])
     else:
         key_id_map = sly.KeyIdMap()
 
-    class2token, tag2token = _build_taxonomy(local_project_path / "meta.json", ann_path)
+    classname_to_token_map = {v: k for k, v in (custom_data.get("classes_token_map") or {}).items()}
 
-    sensors, sensor2token = _collect_sensors(local_project_path)
-    _write_json(ann_path / "sensor.json", sensors)
-
-    calibrated_sensors, cal_token_by_sensor = _collect_calibrated_sensors(
-        local_project_path, sensor2token
+    class2token, tag2token = _build_taxonomy(
+        local_project_path / "meta.json", ann_path, classname_to_token_map
     )
-    _write_json(ann_path / "calibrated_sensor.json", calibrated_sensors)
-    missing_channels = [ch for ch in sensor2token.keys() if ch not in cal_token_by_sensor]
-    if missing_channels:
-        for ch in missing_channels:
-            cal = {
-                "token": _new_token(),
-                "sensor_token": sensor2token[ch],
-                "translation": [0.0, 0.0, 0.0],
-                "rotation": [1.0, 0.0, 0.0, 0.0],
-            }
-            calibrated_sensors.append(cal)
-            cal_token_by_sensor[ch] = cal["token"]
+
+    if (
+        not (ann_path / "sensor.json").exists()
+        or not (ann_path / "calibrated_sensor.json").exists()
+    ):
+        sensors, sensor2token = _collect_sensors(local_project_path)
+        _write_json(ann_path / "sensor.json", sensors)
+
+        calibrated_sensors, cal_token_by_sensor = _collect_calibrated_sensors(
+            local_project_path, sensor2token
+        )
         _write_json(ann_path / "calibrated_sensor.json", calibrated_sensors)
 
+        missing_channels = [ch for ch in sensor2token.keys() if ch not in cal_token_by_sensor]
+        if missing_channels:
+            for ch in missing_channels:
+                cal = {
+                    "token": _new_token(),
+                    "sensor_token": sensor2token[ch],
+                    "translation": [0.0, 0.0, 0.0],
+                    "rotation": [1.0, 0.0, 0.0, 0.0],
+                }
+                calibrated_sensors.append(cal)
+                cal_token_by_sensor[ch] = cal["token"]
+            _write_json(ann_path / "calibrated_sensor.json", calibrated_sensors)
+
     def _ensure_cal(channel: str) -> str:
+        if "cal_token_by_sensor" not in locals():
+            cal_token_by_sensor = {}
         tok = cal_token_by_sensor.get(channel)
         if tok is not None:
             return tok
@@ -750,13 +793,15 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
 
     scenes: List[dict] = []
     samples: List[dict] = []
-    sample_data: List[dict] = []
+    sample_data: List[dict] = [] if build_sample_data else existing_sample_data
     ego_poses: List[dict] = []
 
     last_sd_token_per_channel: Dict[str, Optional[str]] = defaultdict(lambda: None)
 
     sample_token_by_pcd_id_global: Dict[int, str] = {}
     sample_anns_map_global: Dict[str, List[str]] = {}
+
+    frame_idx_to_token = custom_data.get("frame_token_map", {})
 
     for dataset in api.dataset.get_list(project_id):
         dataset_folder = local_project_path / dataset.name
@@ -794,7 +839,7 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
         for frame in frames:
             frame_idx = frame.get("index", 0)
             pcd_id = frame.get("pointCloudId")
-            sample_token = _new_token()
+            sample_token = frame_idx_to_token[str(dataset.id)].get(str(frame_idx)) or _new_token()
             sample_tokens_order.append(sample_token)
             sample_token_by_pcd_id_global[pcd_id] = sample_token
 
@@ -839,54 +884,57 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
             ego_poses.append(ego_row)
             ego_pose_token = ego_row["token"]
 
-            pcd_local: Optional[Path] = None
-            if frame_idx in frame_pcd_map and frame_pcd_map[frame_idx].get("pointcloud_path"):
-                pth = frame_pcd_map[frame_idx]["pointcloud_path"]
-                cand = dataset_folder / pth
-                if cand.exists():
-                    pcd_local = cand
-            if pcd_local is None:
-                pcands = [
-                    p
-                    for p in dataset_folder.rglob("*")
-                    if p.is_file() and p.suffix.lower() in PC_EXTS
-                ]
-                for p in sorted(pcands):
-                    if str(frame_idx) in p.stem:
-                        pcd_local = p
-                        break
-                if pcd_local is None and pcands:
-                    pcd_local = sorted(pcands)[min(frame_idx, len(pcands) - 1)]
-
-            if pcd_local is not None:
-                rel_path, fileformat = _copy_into_samples(pcd_local, samples_path, LIDAR_CHANNEL)
-                sd_token = _new_token()
-                sd = {
-                    "token": sd_token,
-                    "sample_token": sample_token,
-                    "ego_pose_token": ego_pose_token,
-                    "calibrated_sensor_token": _ensure_cal(LIDAR_CHANNEL),
-                    "timestamp": ts,
-                    "fileformat": pcd_local.suffix.lstrip(".").lower(),
-                    "is_key_frame": True,
-                    "height": 0,
-                    "width": 0,
-                    "filename": rel_path,
-                    "sensor_modality": "lidar",
-                    "channel": LIDAR_CHANNEL,
-                    "prev": last_sd_token_per_channel[LIDAR_CHANNEL] or "",
-                    "next": "",
-                }
-                if last_sd_token_per_channel[LIDAR_CHANNEL]:
-                    for sd_prev in reversed(sample_data):
-                        if sd_prev["token"] == last_sd_token_per_channel[LIDAR_CHANNEL]:
-                            sd_prev["next"] = sd_token
+            if build_sample_data:
+                pcd_local: Optional[Path] = None
+                if frame_idx in frame_pcd_map and frame_pcd_map[frame_idx].get("pointcloud_path"):
+                    pth = frame_pcd_map[frame_idx]["pointcloud_path"]
+                    cand = dataset_folder / pth
+                    if cand.exists():
+                        pcd_local = cand
+                if pcd_local is None:
+                    pcands = [
+                        p
+                        for p in dataset_folder.rglob("*")
+                        if p.is_file() and p.suffix.lower() in PC_EXTS
+                    ]
+                    for p in sorted(pcands):
+                        if str(frame_idx) in p.stem:
+                            pcd_local = p
                             break
-                last_sd_token_per_channel[LIDAR_CHANNEL] = sd_token
-                sample_data.append(sd)
-                current_sample_row["data"][LIDAR_CHANNEL] = sd_token
+                    if pcd_local is None and pcands:
+                        pcd_local = sorted(pcands)[min(frame_idx, len(pcands) - 1)]
 
-            if frame_idx in rimgs_by_frame:
+                if pcd_local is not None:
+                    rel_path, fileformat = _copy_into_samples(
+                        pcd_local, samples_path, LIDAR_CHANNEL
+                    )
+                    sd_token = _new_token()
+                    sd = {
+                        "token": sd_token,
+                        "sample_token": sample_token,
+                        "ego_pose_token": ego_pose_token,
+                        "calibrated_sensor_token": _ensure_cal(LIDAR_CHANNEL),
+                        "timestamp": ts,
+                        "fileformat": pcd_local.suffix.lstrip(".").lower(),
+                        "is_key_frame": True,
+                        "height": 0,
+                        "width": 0,
+                        "filename": rel_path,
+                        "sensor_modality": "lidar",
+                        "channel": LIDAR_CHANNEL,
+                        "prev": last_sd_token_per_channel[LIDAR_CHANNEL] or "",
+                        "next": "",
+                    }
+                    if last_sd_token_per_channel[LIDAR_CHANNEL]:
+                        for sd_prev in reversed(sample_data):
+                            if sd_prev["token"] == last_sd_token_per_channel[LIDAR_CHANNEL]:
+                                sd_prev["next"] = sd_token
+                                break
+                    last_sd_token_per_channel[LIDAR_CHANNEL] = sd_token
+                    sample_data.append(sd)
+                    current_sample_row["data"][LIDAR_CHANNEL] = sd_token
+
+            if build_sample_data and frame_idx in rimgs_by_frame:
                 for sensor_name, info in rimgs_by_frame[frame_idx].items():
                     img_path = info.get("image")
                     if img_path is None or not img_path.exists():
@@ -921,35 +969,36 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
                     sample_data.append(sd)
                     current_sample_row["data"][sensor_name] = sd_token
 
-            for channel in sensor2token.keys():
-                if channel in current_sample_row["data"]:
-                    continue
-                sd_token = _new_token()
-                modality = "lidar" if channel == LIDAR_CHANNEL else "camera"
-                sd_stub = {
-                    "token": sd_token,
-                    "sample_token": sample_token,
-                    "ego_pose_token": ego_pose_token,
-                    "calibrated_sensor_token": _ensure_cal(channel),
-                    "timestamp": ts,
-                    "fileformat": "",
-                    "is_key_frame": False,
-                    "height": 0,
-                    "width": 0,
-                    "filename": "",
-                    "sensor_modality": modality,
-                    "channel": channel,
-                    "prev": last_sd_token_per_channel[channel] or "",
-                    "next": "",
-                }
-                if last_sd_token_per_channel[channel]:
-                    for sd_prev in reversed(sample_data):
-                        if sd_prev["token"] == last_sd_token_per_channel[channel]:
-                            sd_prev["next"] = sd_token
-                            break
-                last_sd_token_per_channel[channel] = sd_token
-                sample_data.append(sd_stub)
-                current_sample_row["data"][channel] = sd_token
+            if build_sample_data:
+                for channel in sensor2token.keys():
+                    if channel in current_sample_row["data"]:
+                        continue
+                    sd_token = _new_token()
+                    modality = "lidar" if channel == LIDAR_CHANNEL else "camera"
+                    sd_stub = {
+                        "token": sd_token,
+                        "sample_token": sample_token,
+                        "ego_pose_token": ego_pose_token,
+                        "calibrated_sensor_token": _ensure_cal(channel),
+                        "timestamp": ts,
+                        "fileformat": "",
+                        "is_key_frame": False,
+                        "height": 0,
+                        "width": 0,
+                        "filename": "",
+                        "sensor_modality": modality,
+                        "channel": channel,
+                        "prev": last_sd_token_per_channel[channel] or "",
+                        "next": "",
+                    }
+                    if last_sd_token_per_channel[channel]:
+                        for sd_prev in reversed(sample_data):
+                            if sd_prev["token"] == last_sd_token_per_channel[channel]:
+                                sd_prev["next"] = sd_token
+                                break
+                    last_sd_token_per_channel[channel] = sd_token
+                    sample_data.append(sd_stub)
+                    current_sample_row["data"][channel] = sd_token
 
         scene_row = {
             "token": scene_token,
@@ -1003,15 +1052,22 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
         ]
     )
 
-    _write_json(ann_path / "log.json", logs)
-    _write_json(ann_path / "scene.json", scenes)
-    _write_json(ann_path / "sample.json", samples)
-    _write_json(ann_path / "ego_pose.json", ego_poses)
-    _write_json(ann_path / "calibrated_sensor.json", calibrated_sensors)
-    _write_json(ann_path / "sample_data.json", sample_data)
-    _write_json(ann_path / "sample_annotation.json", all_anns)
+    if not (ann_path / "log.json").exists():
+        _write_json(ann_path / "log.json", logs)
+    if not (ann_path / "scene.json").exists():
+        _write_json(ann_path / "scene.json", scenes)
+    if not (ann_path / "sample.json").exists():
+        _write_json(ann_path / "sample.json", samples)
+    if not (ann_path / "ego_pose.json").exists():
+        _write_json(ann_path / "ego_pose.json", ego_poses)
+    if not (ann_path / "calibrated_sensor.json").exists():
+        _write_json(ann_path / "calibrated_sensor.json", calibrated_sensors)
+    if build_sample_data:
+        _write_json(sample_data_path, sample_data)
+    if not (ann_path / "map.json").exists():
+        _write_json(ann_path / "map.json", maps_table)
     _write_json(ann_path / "instance.json", all_instances)
-    _write_json(ann_path / "map.json", maps_table)
+    _write_json(ann_path / "sample_annotation.json", all_anns)
 
     try:
         ns = NuScenes(version=nuscenes_version, dataroot=dest_dir.as_posix(), verbose=True)
