@@ -653,23 +653,29 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
                 dest_dir = Path(tmp_dir) / "dataroot"
                 if sly.fs.dir_exists(dest_dir.as_posix()):
                     sly.fs.remove_dir(dest_dir.as_posix())
-                try:
+                try:  # -> dataroot is a directory in storage
                     api.file.download_directory(
                         project_info.team_id,
                         dataroot_override,
                         dest_dir.as_posix(),
                     )
-                except HTTPError as http_err:
+                except HTTPError as http_err:  # -> dataroot is an archive
                     if "Directory is empty" in str(http_err):
                         team_id = project_info.team_id
-                        files = api.storage.list(team_id, Path(dataroot_override).parent.as_posix())
+                        import_dir = Path(dataroot_override).parts[-2]
+                        tf_path = f"/import/auto-import/{import_dir}/"
+                        files = api.storage.list(team_id, tf_path)
                         if not len(files) == 1:
                             raise http_err
                         filepath = files[0].path
-                        api.file.download(project_info.team_id, filepath, dest_dir.as_posix())
+                        local_path = f"{tmp_dir}/{files[0].name}"
+                        api.file.download(project_info.team_id, filepath, local_path)
                         archive_exts = [".zip", ".tar", ".tar.gz", ".tgz"]
-                        if sly.fs.get_file_ext(dest_dir.as_posix()) in archive_exts:
-                            sly.fs.unpack_archive(dest_dir.as_posix(), dest_dir.as_posix())
+                        if sly.fs.get_file_ext(local_path) in archive_exts:
+                            unpack_dir = ".".join(local_path.split(".")[:-1])
+                            sly.fs.unpack_archive(local_path, unpack_dir)
+                            sly.fs.silent_remove(local_path)
+                            dest_dir = Path(unpack_dir)
         else:
             dest_dir = Path(dest_dir)
     except Exception as e:
