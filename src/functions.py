@@ -8,6 +8,7 @@ from typing import Any, DefaultDict, Dict, List, Optional, Tuple
 import numpy as np
 import supervisely as sly
 from nuscenes.nuscenes import NuScenes
+from requests.exceptions import HTTPError
 
 # -------------------------
 # Config / conventions
@@ -642,21 +643,38 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
     nuscenes_version = str(custom_data.get("nuscenes_version") or NUSCENES_VER)
 
     dataroot_override = custom_data.get("dataroot")
-    if dataroot_override:
-        sly.logger.info(f"Using dataroot: {dataroot_override}")
-        candidate_path = Path(dataroot_override)
-        if candidate_path.exists():
-            dest_dir = candidate_path
+    try:
+        if dataroot_override:
+            sly.logger.info(f"Using dataroot: {dataroot_override}")
+            candidate_path = Path(dataroot_override)
+            if candidate_path.exists():
+                dest_dir = candidate_path
+            else:
+                if not api.storage.exists(project_info.team_id, dataroot_override):
+                    raise ValueError(
+                        f"Custom dataroot path '{dataroot_override}' does not exist in the team storage."
+                    )
+                dest_dir = Path(tmp_dir) / "dataroot"
+                if sly.fs.dir_exists(dest_dir.as_posix()):
+                    sly.fs.remove_dir(dest_dir.as_posix())
+                try:
+                    api.file.download_directory(
+                        project_info.team_id,
+                        dataroot_override,
+                        dest_dir.as_posix(),
+                    )
+                except HTTPError as http_err:
+                    if "Directory is empty" in str(http_err):
+                        api.file.download(
+                            project_info.team_id, dataroot_override, dest_dir.as_posix()
+                        )
+                        archive_exts = [".zip", ".tar", ".tar.gz", ".tgz"]
+                        if sly.fs.get_file_ext(dest_dir.as_posix()) in archive_exts:
+                            sly.fs.unpack_archive(dest_dir.as_posix(), dest_dir.as_posix())
         else:
-            dest_dir = Path(tmp_dir) / "dataroot"
-            if sly.fs.dir_exists(dest_dir.as_posix()):
-                sly.fs.remove_dir(dest_dir.as_posix())
-            api.file.download_directory(
-                project_info.team_id,
-                dataroot_override,
-                dest_dir.as_posix(),
-            )
-    else:
+            dest_dir = Path(dest_dir)
+    except Exception as e:
+        sly.logger.warn(f"Failed to use custom dataroot '{dataroot_override}': {repr(e)}")
         dest_dir = Path(dest_dir)
 
     maps_path = dest_dir / "maps"
