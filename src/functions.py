@@ -650,10 +650,6 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
             if candidate_path.exists():
                 dest_dir = candidate_path
             else:
-                if not api.storage.exists(project_info.team_id, dataroot_override):
-                    raise ValueError(
-                        f"Custom dataroot path '{dataroot_override}' does not exist in the team storage."
-                    )
                 dest_dir = Path(tmp_dir) / "dataroot"
                 if sly.fs.dir_exists(dest_dir.as_posix()):
                     sly.fs.remove_dir(dest_dir.as_posix())
@@ -665,9 +661,14 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
                     )
                 except HTTPError as http_err:
                     if "Directory is empty" in str(http_err):
-                        api.file.download(
-                            project_info.team_id, dataroot_override, dest_dir.as_posix()
+                        team_id = project_info.team_id
+                        files = api.storage.list2(
+                            team_id, Path(dataroot_override).parent.as_posix()
                         )
+                        if not len(files) == 1:
+                            raise http_err
+                        filepath = files[0].path
+                        api.file.download(project_info.team_id, filepath, dest_dir.as_posix())
                         archive_exts = [".zip", ".tar", ".tar.gz", ".tgz"]
                         if sly.fs.get_file_ext(dest_dir.as_posix()) in archive_exts:
                             sly.fs.unpack_archive(dest_dir.as_posix(), dest_dir.as_posix())
