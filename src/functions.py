@@ -662,9 +662,7 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
                 except HTTPError as http_err:
                     if "Directory is empty" in str(http_err):
                         team_id = project_info.team_id
-                        files = api.storage.list2(
-                            team_id, Path(dataroot_override).parent.as_posix()
-                        )
+                        files = api.storage.list(team_id, Path(dataroot_override).parent.as_posix())
                         if not len(files) == 1:
                             raise http_err
                         filepath = files[0].path
