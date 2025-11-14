@@ -192,13 +192,14 @@ def _safe_int(v, default=0) -> int:
 
 def _load_key_id_map(project_path: Path) -> Dict[str, Dict[str, Any]]:
     key_map_path = project_path / "key_id_map.json"
+
     if not key_map_path.exists():
-        return {}
+        return sly.KeyIdMap()
     try:
-        return sly.json.load_json_file(key_map_path)
+        return sly.KeyIdMap.from_dict(sly.json.load_json_file(key_map_path))
     except Exception as e:
         sly.logger.warn(f"Failed to read key_id_map.json: {repr(e)}")
-        return {}
+        return sly.KeyIdMap()
 
 
 def _token_from_key_map(entity_key: Optional[str], mapping: Dict[str, Any]) -> Optional[str]:
@@ -523,9 +524,9 @@ def _to_nuscenes_sample_ann(
         "num_radar_pts": int(num_radar_pts),
         "prev": prev,
         "rotation": quaternion,
-        "sample_token": sample_token,
+        "sample_token": str(sample_token),
         "size": size,
-        "token": token,
+        "token": str(token),
         "translation": translation,
         "visibility_token": visibility_token,
     }
@@ -536,7 +537,7 @@ def _build_annotations_and_instances(
     dataset_id: int,
     class_id_to_token: Dict[int, str],
     sample_token_by_pcd_id: Dict[int, str],
-    key_id_map: Optional[Dict[str, Dict[str, Any]]] = None,
+    key_id_map: sly.KeyIdMap,
 ) -> Tuple[List[dict], List[dict], Dict[str, List[str]]]:
     global project_type
     if project_type == WorkingProjectType.POINT_CLOUD:
@@ -551,14 +552,10 @@ def _build_annotations_and_instances(
     object_id_to_name = {}
     sample_to_ann_tokens: DefaultDict[str, List[str]] = defaultdict(list)
 
-    object_token_map = (key_id_map or {}).get("objects", {})
-    figure_token_map = (key_id_map or {}).get("figures", {})
-
     for obj in ann["objects"]:
         object_id = obj["id"]
         object_id_to_name[object_id] = obj["classTitle"]
-        obj_key = obj.get("key")
-        instance_token = _token_from_key_map(obj_key, object_token_map) or obj_key or _new_token()
+        instance_token = str(key_id_map.get_object_key(int(object_id))) or _new_token()
         class_token = class_id_to_token.get(obj["classId"])
         instances_rows[instance_token] = {
             "category_token": class_token,
@@ -579,10 +576,8 @@ def _build_annotations_and_instances(
             category_name = object_id_to_name.get(figure["objectId"], "unknown")
             object_id = figure["objectId"]
             instance_token = object_id_to_instance_token.get(object_id)
-            figure_key = figure.get("key")
-            ann_token = (
-                _token_from_key_map(figure_key, figure_token_map) or figure_key or _new_token()
-            )
+            figure_id = figure["id"]
+            ann_token = key_id_map.get_figure_key(int(figure_id)) or _new_token()
             nuscenes_ann = _to_nuscenes_sample_ann(
                 box,
                 category_name=category_name,
@@ -661,6 +656,7 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
                     )
                 except HTTPError as http_err:  # -> dataroot is an archive
                     if "Directory is empty" in str(http_err):
+                        project_archive_name = f"{project_info.id}_{project_info.name}"
                         team_id = project_info.team_id
                         import_dir = Path(dataroot_override).parts[-2]
                         tf_path = f"/import/auto-import/{import_dir}/"
@@ -672,10 +668,9 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
                         api.file.download(project_info.team_id, filepath, local_path)
                         archive_exts = [".zip", ".tar", ".tar.gz", ".tgz"]
                         if sly.fs.get_file_ext(local_path) in archive_exts:
-                            unpack_dir = ".".join(local_path.split(".")[:-1])
-                            sly.fs.unpack_archive(local_path, unpack_dir)
+                            dest_dir = dest_dir / project_archive_name
+                            sly.fs.unpack_archive(local_path, dest_dir.as_posix())
                             sly.fs.silent_remove(local_path)
-                            dest_dir = Path(unpack_dir)
         else:
             dest_dir = Path(dest_dir)
     except Exception as e:
@@ -954,6 +949,7 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
             dataset.id,
             class_id_to_token=class2token,
             sample_token_by_pcd_id=sample_token_by_pcd_id_global,
+            key_id_map=key_id_map,
         )
         all_anns.extend(anns)
         all_instances.extend(instances)
