@@ -679,7 +679,7 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
         else:
             dest_dir = Path(dest_dir)
     except Exception as e:
-        sly.logger.warn(f"Failed to use custom dataroot '{dataroot_override}': {repr(e)}")
+        sly.logger.warning(f"Failed to use custom dataroot '{dataroot_override}': {repr(e)}")
         dest_dir = Path(dest_dir)
 
     maps_path = dest_dir / "maps"
@@ -997,6 +997,8 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
     _write_json(ann_path / "map.json", maps_table)
 
     try:
-        ns = NuScenes(version=NUSCENES_VER, dataroot=dest_dir.as_posix(), verbose=True)
+        ns = NuScenes(version=nuscenes_version, dataroot=dest_dir.as_posix(), verbose=True)
     except Exception as e:
         sly.logger.error(f"NuScenes failed validation due to error: {repr(e)}")
+
+    return dest_dir.as_posix()
