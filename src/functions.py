@@ -189,6 +189,25 @@ def _safe_int(v, default=0) -> int:
         return default
 
 
+def _load_key_id_map(project_path: Path) -> Dict[str, Dict[str, Any]]:
+    key_map_path = project_path / "key_id_map.json"
+    if not key_map_path.exists():
+        return {}
+    try:
+        return sly.json.load_json_file(key_map_path)
+    except Exception as e:
+        sly.logger.warn(f"Failed to read key_id_map.json: {repr(e)}")
+        return {}
+
+
+def _token_from_key_map(entity_key: Optional[str], mapping: Dict[str, Any]) -> Optional[str]:
+    if entity_key is None:
+        return None
+    if entity_key in mapping:
+        return str(mapping[entity_key])
+    return None
+
+
 # -------------------------
 # Project parsing
 # -------------------------
@@ -462,6 +481,7 @@ def _to_nuscenes_sample_ann(
     next_: str = "",
     angles_in_degrees: bool = False,
     dims_map: Tuple[str, str, str] = ("x", "y", "z"),
+    token: Optional[str] = None,
 ) -> dict:
     pos = box.get("position", {})
     rot = box.get("rotation", {})
@@ -487,7 +507,7 @@ def _to_nuscenes_sample_ann(
         yaw = math.radians(yaw)
     quaternion = _euler_to_quaternion(roll, pitch, yaw)
 
-    token = _new_token()
+    token = token or _new_token()
     if instance_token is None:
         instance_token = _new_token()
     if attribute_tokens is None:
@@ -515,6 +535,7 @@ def _build_annotations_and_instances(
     dataset_id: int,
     class_id_to_token: Dict[int, str],
     sample_token_by_pcd_id: Dict[int, str],
+    key_id_map: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Tuple[List[dict], List[dict], Dict[str, List[str]]]:
     global project_type
     if project_type == WorkingProjectType.POINT_CLOUD:
@@ -529,10 +550,14 @@ def _build_annotations_and_instances(
     object_id_to_name = {}
     sample_to_ann_tokens: DefaultDict[str, List[str]] = defaultdict(list)
 
+    object_token_map = (key_id_map or {}).get("objects", {})
+    figure_token_map = (key_id_map or {}).get("figures", {})
+
     for obj in ann["objects"]:
         object_id = obj["id"]
         object_id_to_name[object_id] = obj["classTitle"]
-        instance_token = _new_token()
+        obj_key = obj.get("key")
+        instance_token = _token_from_key_map(obj_key, object_token_map) or obj_key or _new_token()
         class_token = class_id_to_token.get(obj["classId"])
         instances_rows[instance_token] = {
             "category_token": class_token,
@@ -553,6 +578,10 @@ def _build_annotations_and_instances(
             category_name = object_id_to_name.get(figure["objectId"], "unknown")
             object_id = figure["objectId"]
             instance_token = object_id_to_instance_token.get(object_id)
+            figure_key = figure.get("key")
+            ann_token = (
+                _token_from_key_map(figure_key, figure_token_map) or figure_key or _new_token()
+            )
             nuscenes_ann = _to_nuscenes_sample_ann(
                 box,
                 category_name=category_name,
@@ -560,6 +589,7 @@ def _build_annotations_and_instances(
                 instance_token=instance_token,
                 attribute_tokens=[],
                 visibility_token="1",
+                token=ann_token,
             )
             anns.append(nuscenes_ann)
             inst_to_anns[instance_token].append(nuscenes_ann)
@@ -608,15 +638,36 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
 
             download_pointcloud_project(api, project_id, local_project_path.as_posix())
 
-    dest_dir = Path(dest_dir)
+    custom_data = api.project.get_custom_data(project_id) or {}
+    nuscenes_version = str(custom_data.get("nuscenes_version") or NUSCENES_VER)
+
+    dataroot_override = custom_data.get("dataroot")
+    if dataroot_override:
+        candidate_path = Path(dataroot_override)
+        if candidate_path.exists():
+            dest_dir = candidate_path
+        else:
+            dest_dir = Path(tmp_dir) / "dataroot"
+            if sly.fs.dir_exists(dest_dir.as_posix()):
+                sly.fs.remove_dir(dest_dir.as_posix())
+            api.file.download_directory(
+                project_info.team_id,
+                dataroot_override,
+                dest_dir.as_posix(),
+            )
+    else:
+        dest_dir = Path(dest_dir)
+
     maps_path = dest_dir / "maps"
     samples_path = dest_dir / "samples"
     sweeps_path = dest_dir / "sweeps"
-    ann_path = dest_dir / NUSCENES_VER
+    ann_path = dest_dir / nuscenes_version
     _ensure_dir(maps_path)
     _ensure_dir(samples_path)
     _ensure_dir(sweeps_path)
     _ensure_dir(ann_path)
+
+    key_id_map = _load_key_id_map(local_project_path)
 
     class2token, tag2token = _build_taxonomy(local_project_path / "meta.json", ann_path)
 
