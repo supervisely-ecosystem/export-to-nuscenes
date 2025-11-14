@@ -643,6 +643,7 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
 
     dataroot_override = custom_data.get("dataroot")
     if dataroot_override:
+        sly.logger.info(f"Using dataroot: {dataroot_override}")
         candidate_path = Path(dataroot_override)
         if candidate_path.exists():
             dest_dir = candidate_path
