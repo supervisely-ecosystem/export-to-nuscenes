@@ -158,8 +158,23 @@ def build_nuscenes_records(
 # -------------------------
 # IO helpers
 # -------------------------
+def _sanitize_token(token: Optional[str]) -> Optional[str]:
+    if token is None:
+        return None
+    if isinstance(token, uuid.UUID):
+        token = token.hex
+    token_str = str(token).strip()
+    if not token_str:
+        return None
+    token_str = token_str.replace("-", "").lower()
+    return token_str
+
+
 def _new_token() -> str:
-    return uuid.uuid4().hex
+    sanitized = _sanitize_token(uuid.uuid4().hex)
+    if sanitized is None:
+        raise RuntimeError("Failed to generate token")
+    return sanitized
 
 
 def _write_json(path: Path, data: Any):
@@ -190,7 +205,7 @@ def _safe_int(v, default=0) -> int:
         return default
 
 
-def _load_key_id_map(project_path: Path) -> Dict[str, Dict[str, Any]]:
+def _load_key_id_map(project_path: Path) -> sly.KeyIdMap:
     key_map_path = project_path / "key_id_map.json"
 
     if not key_map_path.exists():
@@ -524,9 +539,9 @@ def _to_nuscenes_sample_ann(
         "num_radar_pts": int(num_radar_pts),
         "prev": prev,
         "rotation": quaternion,
-        "sample_token": str(sample_token),
+        "sample_token": sample_token,
         "size": size,
-        "token": str(token),
+        "token": token,
         "translation": translation,
         "visibility_token": visibility_token,
     }
@@ -555,7 +570,8 @@ def _build_annotations_and_instances(
     for obj in ann["objects"]:
         object_id = obj["id"]
         object_id_to_name[object_id] = obj["classTitle"]
-        instance_token = str(key_id_map.get_object_key(int(object_id))) or _new_token()
+        raw_instance_token = key_id_map.get_object_key(int(object_id))
+        instance_token = _sanitize_token(raw_instance_token) or _new_token()
         class_token = class_id_to_token.get(obj["classId"])
         instances_rows[instance_token] = {
             "category_token": class_token,
@@ -577,7 +593,8 @@ def _build_annotations_and_instances(
             object_id = figure["objectId"]
             instance_token = object_id_to_instance_token.get(object_id)
             figure_id = figure["id"]
-            ann_token = key_id_map.get_figure_key(int(figure_id)) or _new_token()
+            raw_ann_token = key_id_map.get_figure_key(int(figure_id))
+            ann_token = _sanitize_token(raw_ann_token) or _new_token()
             nuscenes_ann = _to_nuscenes_sample_ann(
                 box,
                 category_name=category_name,
@@ -686,7 +703,11 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
     _ensure_dir(sweeps_path)
     _ensure_dir(ann_path)
 
-    key_id_map = _load_key_id_map(local_project_path)
+    # key_id_map = _load_key_id_map(local_project_path)
+    if "key_id_map" in custom_data:
+        key_id_map = sly.KeyIdMap.from_dict(custom_data["key_id_map"])
+    else:
+        key_id_map = sly.KeyIdMap()
 
     class2token, tag2token = _build_taxonomy(local_project_path / "meta.json", ann_path)
 
