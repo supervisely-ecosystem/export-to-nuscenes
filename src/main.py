@@ -11,8 +11,8 @@ class MyExport(sly.app.Export):
         project = g.api.project.get_info_by_id(id=context.project_id)
         nuscenes_path = Path(g.app_data).joinpath(f"{project.id}_{project.name}_nuscenes")
         nuscenes_path.mkdir(exist_ok=True)
-        f.convert_sly_project_to_nuscenes(g.api, context.project_id, nuscenes_path)
-        return nuscenes_path.as_posix()
+
+        return f.convert_sly_project_to_nuscenes(g.api, context.project_id, nuscenes_path)
 
 
 def main():

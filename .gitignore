@@ -1,5 +1,6 @@
 .venv
 temp
+tmp
 supervisely
 __pycache__
 .DS_Store
