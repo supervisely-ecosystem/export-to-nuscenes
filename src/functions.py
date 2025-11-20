@@ -369,7 +369,7 @@ def _build_taxonomy(
         categories.append({"token": tok, "name": title, "description": desc})
     _write_json(ann_path / "category.json", categories)
 
-    if (ann_path / "attribute.json").exists():
+    if not (ann_path / "attribute.json").exists():
         attributes = []
         for attr in meta.get("tags", []):
             name = attr["name"]
