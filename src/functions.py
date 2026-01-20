@@ -819,7 +819,7 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
         return cal["token"]
 
     logs: List[dict] = []
-    log_token_by_dataset: Dict[str, str] = {}
+    # log_token_by_dataset: Dict[str, str] = {}
 
     scenes: List[dict] = []
     samples: List[dict] = []
@@ -838,16 +838,16 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
         if not dataset_folder.exists():
             continue
 
-        log_token = _new_token()
-        log_token_by_dataset[dataset.name] = log_token
-        log_row = {
-            "token": log_token,
-            "logfile": f"{dataset.name}.log",
-            "vehicle": "n/a",
-            "date_captured": "n/a",
-            "location": "n/a",
-        }
-        logs.append(log_row)
+        # log_token = _new_token()
+        # log_token_by_dataset[dataset.name] = log_token
+        # log_row = {
+        #     "token": log_token,
+        #     "logfile": f"{dataset.name}.log",
+        #     "vehicle": "n/a",
+        #     "date_captured": "n/a",
+        #     "location": "n/a",
+        # }
+        # logs.append(log_row)
 
         rimgs_by_frame = _collect_related_images(dataset_folder)
         frame_pcd_map = _load_frame_pcd_map(dataset_folder)
@@ -1036,7 +1036,7 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
             "token": scene_token,
             "name": scene_name,
             "description": "",
-            "log_token": log_token,
+            "log_token": None,
             "first_sample_token": sample_tokens_order[0] if sample_tokens_order else "",
             "last_sample_token": sample_tokens_order[-1] if sample_tokens_order else "",
             "nbr_samples": len(sample_tokens_order),
@@ -1064,25 +1064,14 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
     for s in samples:
         s["anns"] = sample_anns_map_global.get(s["token"], [])
 
-    maps_table = (
-        [
-            {
-                "token": _new_token(),
-                "category": "semantic_prior",
-                "filename": "",  # no semantic prior available
-                "log_tokens": [row["token"] for row in logs],
-            }
-        ]
-        if len(logs) > 0
-        else [
-            {
-                "token": _new_token(),
-                "category": "semantic_prior",
-                "filename": "",
-                "log_tokens": [],
-            }
-        ]
-    )
+    maps_table = [
+        {
+            "token": _new_token(),
+            "category": "semantic_prior",
+            "filename": "",
+            "log_tokens": [row["token"] for row in logs],
+        }
+    ]
 
     if not (ann_path / "log.json").exists():
         _write_json(ann_path / "log.json", logs)
