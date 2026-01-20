@@ -16,14 +16,10 @@ class MyExport(sly.app.Export):
 
 
 def main():
-    try:
-        app = MyExport()
-        app.run()
-    except Exception as e:
-        f.handle_exception(e, g.api, g.task_id)
-    finally:
-        if not sly.is_development():
-            sly.fs.remove_dir(g.app_data)
+    app = MyExport()
+    app.run()
+    if not sly.is_development():
+        sly.fs.remove_dir(g.app_data)
 
 
 if __name__ == "__main__":
