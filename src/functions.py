@@ -417,9 +417,6 @@ def _build_taxonomy(
             {"token": "4", "description": "visibility 80-100%"},
         ]
         _write_json(ann_path / "visibility.json", visibility)
-
-    if not (ann_path / "map.json").exists():
-        _write_json(ann_path / "map.json", [])
     return class2token, tag2token
 
 
@@ -1138,8 +1135,17 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
         _write_json(ann_path / "ego_pose.json", ego_poses)
     if build_sample_data:
         _write_json(sample_data_path, sample_data)
-    if not (ann_path / "map.json").exists():
-        _write_json(ann_path / "map.json", maps_table)
+    map_path = ann_path / "map.json"
+    should_write_map = True
+    if map_path.exists():
+        try:
+            existing_map = sly.json.load_json_file(map_path)
+            if isinstance(existing_map, list) and len(existing_map) > 0:
+                should_write_map = False
+        except Exception:
+            should_write_map = True
+    if should_write_map:
+        _write_json(map_path, maps_table)
     _write_json(ann_path / "instance.json", all_instances)
     _write_json(ann_path / "sample_annotation.json", all_anns)
 
