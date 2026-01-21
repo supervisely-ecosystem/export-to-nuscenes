@@ -417,9 +417,6 @@ def _build_taxonomy(
             {"token": "4", "description": "visibility 80-100%"},
         ]
         _write_json(ann_path / "visibility.json", visibility)
-
-    if not (ann_path / "map.json").exists():
-        _write_json(ann_path / "map.json", [])
     return class2token, tag2token
 
 
@@ -777,37 +774,91 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
         local_project_path / "meta.json", ann_path, classname_to_token_map
     )
 
-    if (
-        not (ann_path / "sensor.json").exists()
-        or not (ann_path / "calibrated_sensor.json").exists()
-    ):
-        sensors, sensor2token = _collect_sensors(local_project_path)
-        _write_json(ann_path / "sensor.json", sensors)
+    sensors_dirty = False
+    cal_dirty = False
 
+    sensor_path = ann_path / "sensor.json"
+    cal_path = ann_path / "calibrated_sensor.json"
+
+    sensors: List[dict] = []
+    sensor2token: Dict[str, str] = {}
+    if sensor_path.exists():
+        try:
+            sensors = sly.json.load_json_file(sensor_path) or []
+        except Exception as e:
+            sly.logger.warning(f"Failed to read sensor.json ({sensor_path.as_posix()}): {repr(e)}")
+            sensors = []
+        if isinstance(sensors, list):
+            for row in sensors:
+                if not isinstance(row, dict):
+                    continue
+                ch = row.get("channel")
+                tok = row.get("token")
+                if ch and tok:
+                    sensor2token[str(ch)] = str(tok)
+    if not sensors or not sensor2token:
+        sensors, sensor2token = _collect_sensors(local_project_path)
+        _write_json(sensor_path, sensors)
+        sensors_dirty = True
+
+    calibrated_sensors: List[dict] = []
+    cal_token_by_sensor: Dict[str, str] = {}
+    if cal_path.exists():
+        try:
+            calibrated_sensors = sly.json.load_json_file(cal_path) or []
+        except Exception as e:
+            sly.logger.warning(
+                f"Failed to read calibrated_sensor.json ({cal_path.as_posix()}): {repr(e)}"
+            )
+            calibrated_sensors = []
+
+        inv_sensor_token_to_channel = {v: k for k, v in sensor2token.items() if v}
+        if isinstance(calibrated_sensors, list):
+            for row in calibrated_sensors:
+                if not isinstance(row, dict):
+                    continue
+                tok = row.get("token")
+                s_tok = row.get("sensor_token")
+                if not tok or not s_tok:
+                    continue
+                ch = inv_sensor_token_to_channel.get(str(s_tok))
+                if ch and ch not in cal_token_by_sensor:
+                    cal_token_by_sensor[ch] = str(tok)
+
+    if not calibrated_sensors or not cal_token_by_sensor:
         calibrated_sensors, cal_token_by_sensor = _collect_calibrated_sensors(
             local_project_path, sensor2token
         )
-        _write_json(ann_path / "calibrated_sensor.json", calibrated_sensors)
+        _write_json(cal_path, calibrated_sensors)
+        cal_dirty = True
 
-        missing_channels = [ch for ch in sensor2token.keys() if ch not in cal_token_by_sensor]
-        if missing_channels:
-            for ch in missing_channels:
-                cal = {
-                    "token": _new_token(),
-                    "sensor_token": sensor2token[ch],
-                    "translation": [0.0, 0.0, 0.0],
-                    "rotation": [1.0, 0.0, 0.0, 0.0],
-                }
-                calibrated_sensors.append(cal)
-                cal_token_by_sensor[ch] = cal["token"]
-            _write_json(ann_path / "calibrated_sensor.json", calibrated_sensors)
+    # Ensure every known channel has a calibrated_sensor.
+    missing_channels = [ch for ch in sensor2token.keys() if ch not in cal_token_by_sensor]
+    if missing_channels:
+        for ch in missing_channels:
+            cal = {
+                "token": _new_token(),
+                "sensor_token": sensor2token[ch],
+                "translation": [0.0, 0.0, 0.0],
+                "rotation": [1.0, 0.0, 0.0, 0.0],
+            }
+            calibrated_sensors.append(cal)
+            cal_token_by_sensor[ch] = cal["token"]
+        _write_json(cal_path, calibrated_sensors)
+        cal_dirty = True
 
     def _ensure_cal(channel: str) -> str:
-        if "cal_token_by_sensor" not in locals():
-            cal_token_by_sensor = {}
+        nonlocal cal_dirty, sensors_dirty
         tok = cal_token_by_sensor.get(channel)
         if tok is not None:
             return tok
+        if channel not in sensor2token:
+            st = _new_token()
+            modality = "lidar" if channel == LIDAR_CHANNEL else "camera"
+            sensors.append({"token": st, "channel": channel, "modality": modality})
+            sensor2token[channel] = st
+            _write_json(sensor_path, sensors)
+            sensors_dirty = True
         cal = {
             "token": _new_token(),
             "sensor_token": sensor2token[channel],
@@ -816,6 +867,7 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
         }
         calibrated_sensors.append(cal)
         cal_token_by_sensor[channel] = cal["token"]
+        cal_dirty = True
         return cal["token"]
 
     logs: List[dict] = []
@@ -1081,14 +1133,78 @@ def convert_sly_project_to_nuscenes(api: sly.Api, project_id, dest_dir):
         _write_json(ann_path / "sample.json", samples)
     if not (ann_path / "ego_pose.json").exists():
         _write_json(ann_path / "ego_pose.json", ego_poses)
-    if not (ann_path / "calibrated_sensor.json").exists():
-        _write_json(ann_path / "calibrated_sensor.json", calibrated_sensors)
     if build_sample_data:
         _write_json(sample_data_path, sample_data)
-    if not (ann_path / "map.json").exists():
-        _write_json(ann_path / "map.json", maps_table)
+    map_path = ann_path / "map.json"
+    should_write_map = True
+    if map_path.exists():
+        try:
+            existing_map = sly.json.load_json_file(map_path)
+            if isinstance(existing_map, list) and len(existing_map) > 0:
+                should_write_map = False
+        except Exception:
+            should_write_map = True
+    if should_write_map:
+        _write_json(map_path, maps_table)
     _write_json(ann_path / "instance.json", all_instances)
     _write_json(ann_path / "sample_annotation.json", all_anns)
+
+    try:
+        if isinstance(sample_data, list) and calibrated_sensors is not None:
+            existing_cal_tokens = {
+                str(row.get("token"))
+                for row in calibrated_sensors
+                if isinstance(row, dict) and row.get("token")
+            }
+            ref_tokens = {
+                str(sd.get("calibrated_sensor_token"))
+                for sd in sample_data
+                if isinstance(sd, dict) and sd.get("calibrated_sensor_token")
+            }
+            missing = [t for t in ref_tokens if t not in existing_cal_tokens]
+            if missing:
+                by_cal_token: Dict[str, dict] = {}
+                for sd in sample_data:
+                    if not isinstance(sd, dict):
+                        continue
+                    t = sd.get("calibrated_sensor_token")
+                    if not t or str(t) not in missing:
+                        continue
+                    by_cal_token[str(t)] = sd
+
+                for tok in missing:
+                    sd = by_cal_token.get(tok, {})
+                    ch = sd.get("channel")
+                    if not ch:
+                        continue
+                    ch = str(ch)
+                    if ch not in sensor2token:
+                        st = _new_token()
+                        modality = "lidar" if ch == LIDAR_CHANNEL else "camera"
+                        sensors.append({"token": st, "channel": ch, "modality": modality})
+                        sensor2token[ch] = st
+                        sensors_dirty = True
+                    calibrated_sensors.append(
+                        {
+                            "token": tok,
+                            "sensor_token": sensor2token[ch],
+                            "translation": [0.0, 0.0, 0.0],
+                            "rotation": [1.0, 0.0, 0.0, 0.0],
+                        }
+                    )
+                    cal_token_by_sensor.setdefault(ch, tok)
+                    cal_dirty = True
+
+                sly.logger.warning(
+                    f"Repaired calibrated_sensor.json: added {len(missing)} missing calibrated_sensor records"
+                )
+    except Exception as e:
+        sly.logger.warning(f"Failed to repair calibrated_sensor references: {repr(e)}")
+
+    if sensors_dirty:
+        _write_json(sensor_path, sensors)
+    if cal_dirty:
+        _write_json(cal_path, calibrated_sensors)
 
     try:
         ns = NuScenes(version=nuscenes_version, dataroot=dest_dir.as_posix(), verbose=True)
