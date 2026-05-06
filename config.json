@@ -9,7 +9,7 @@
     "context_root": "Download as"
   },
   "description": "Export Pointclouds and Pointcloud Episodes to NuScenes format",
-  "docker_image": "supervisely/import-export:6.73.460",
+  "docker_image": "supervisely/import-export:6.73.564",
   "main_script": "src/main.py",
   "task_location": "workspace_tasks",
   "headless": true,
