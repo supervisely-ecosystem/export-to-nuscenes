@@ -2,7 +2,7 @@
   "name": "Export Point Clouds to NuScenes",
   "type": "app",
   "version": "2.0.0",
-  "instance_version": "6.15.2",
+  "instance_version": "6.15.60",
   "categories": ["pointclouds", "export"],
   "context_menu": {
     "target": ["point_cloud_project", "point_cloud_episodes_project"],
