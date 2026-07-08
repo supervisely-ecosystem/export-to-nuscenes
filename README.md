@@ -14,7 +14,7 @@
 
 ## Overview
 
-The **Export Point Clouds to NuScenes** application is an export tool that converts your Supervisely Pointcloud/Pointcloud episodes project to the NuScenes format. The resulting archive's contents are fully readable by the official [NuScenes devkit](https://github.com/nutonomy/nuscenes-devkit).
+The **Export Point Clouds to NuScenes** application is an export tool that converts your Supervisely Point Cloud / Point Cloud episodes project to the NuScenes format. The resulting archive's contents are fully readable by the official [NuScenes devkit](https://github.com/nutonomy/nuscenes-devkit).
 
 ## How to Run
 
@@ -28,7 +28,7 @@ Option 1. Supervisely Ecosystem:
 
 Option 2: Project context menu:
 
-1. Go to Pointcloud / Pointcloud episode project you want to export
+1. Go to Point Cloud / Point Cloud episode project you want to export
 
 2. Right-click on the project and choose `Download` -> `Export to ROS Bag`
 
