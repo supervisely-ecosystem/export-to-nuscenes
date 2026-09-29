@@ -1,2 +1,2 @@
-supervisely==6.73.577
+supervisely==6.74.34
 nuscenes-devkit
